@@ -10,8 +10,11 @@ local Configurations = require(script.Parent.Configurations)
 local StarterData = require(script.Parent.StarterData)
 
 --| Variables |--
-local Updater = script.Parent.Assets.PlayerData.Updater
-script.Parent.Assets.PlayerData.Parent = game.ReplicatedStorage
+local Updater
+if RunService:IsRunning() then --| Preventing parenting PlayerData on command bar
+	Updater = script.Parent.Assets.PlayerData.Updater
+	script.Parent.Assets.PlayerData.Parent = game.ReplicatedStorage
+end
 
 --|| Private Functions 
 local function Copy(Table)
@@ -39,7 +42,7 @@ local function Debug(...)
 end
 
 function Datastore:Write(Player, Directory, Value, Number)
-	if not Player then warn(script.Name, "Attempted to replicate to a non-existent player") return end
+	if not Player or not CachedData[Player.UserId] or not CachedData[Player.UserId].Data then warn(script.Name, "Attempted to replicate to a non-existent player") return end
 	local Pointer = CachedData[Player.UserId].Data
 	local ParentPointer, LastIndex = nil, nil
 	local Paths = string.split(Directory, ".")
@@ -350,9 +353,11 @@ game:BindToClose(function()
 	for _, Player in ipairs(game.Players:GetPlayers()) do
 		Datastore:Save(Player.UserId, true)
 	end
-	--| Will Yield Until All Players Are GONE
-	while GetIndexCount(CachedData) > 0 do
-		RunService.Stepped:Wait()
+	if Configurations.StudioSave and RunService:IsStudio() or not RunService:IsStudio() then
+		--| Will Yield Until All Players Are GONE
+		while GetIndexCount(CachedData) > 0 do
+			RunService.Stepped:Wait()
+		end
 	end
 end)
 
