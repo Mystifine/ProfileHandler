@@ -83,6 +83,7 @@ function Methods:Update(Index, Value, Number)
 		(DirectoryValue == nil or type(DirectoryValue) == "nil") and "IndexAdded"
 		or (DirectoryValue ~= nil and type(DirectoryValue) ~= "nil" and Value == nil) and "IndexRemoved"
 		or (DirectoryValue ~= Value) and "IndexChanged";
+	Index = Number and Index.."."..Number or Index;
 	local EventName = Index == "" and "self" or "self."..Index
 	if Condition == "IndexAdded" then
 		local SplittedEventName = string.split(EventName, ".");
