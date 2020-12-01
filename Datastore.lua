@@ -70,7 +70,7 @@ function Datastore:Write(Player, Directory, Value, Number)
 end
 
 function Datastore:Get(UserId)
-	while CachedData[UserId] and not CachedData[UserId].Data do
+	while not CachedData[UserId] or not CachedData[UserId].Data do
 		RunService.Stepped:Wait()
 	end
 	return CachedData[UserId] and CachedData[UserId].Data or nil
