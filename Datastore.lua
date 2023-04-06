@@ -1,378 +1,367 @@
---|| Services ||--
-local DataStoreService = game:GetService("DataStoreService")
-local RunService = game:GetService("RunService")
+local datastoreservice = game:GetService("DataStoreService");
+local runservice = game:GetService("RunService");
+local serverstorage = game:GetService('ServerStorage')
+local players = game:GetService("Players")
+local debris = game:GetService('Debris')
 
-local Datastore = {}
-local CachedData = {}
+local datastore_module = {};
 
---|| Modules ||--
-local Configurations = require(script.Parent.Configurations)
-local StarterData = require(script.Parent.StarterData)
+local data_cache = {};
+local objects_cache = {};
+local cooldown_log = {};
+local before_last_save_functions = {};
 
---| Variables |--
-local Updater
-if RunService:IsRunning() then --| Preventing parenting PlayerData on command bar
-	Updater = script.Parent.Assets.PlayerData.Updater
-	script.Parent.Assets.PlayerData.Parent = game.ReplicatedStorage
+local constants = require(script.constants);
+
+local MASTER_KEY = constants.MASTER_KEY;
+local STUDIO_SAVE = constants.STUDIO_SAVE;
+
+local datastore = datastoreservice:GetDataStore(MASTER_KEY);
+
+local function debug_output(output_func, ...)
+	if constants.DEBUG_MODE then
+		output_func(...);
+	end
 end
 
---|| Private Functions 
-local function Copy(Table)
-	local NewTable = {}
-	for Index, Value in next, Table do
-		if typeof(Value) == "table" then
-			NewTable[Index] = Copy(Value)
+local function deep_copy(data : any)
+	if data == nil then
+		warn(string.format("[%s]: Attempted to deep copy nil value.", script.Name))
+	end
+	
+	local new_data = {};
+	for index, value in pairs(data) do 
+		if typeof(value) == "table" then
+			new_data[index] = deep_copy(value);
 		else
-			NewTable[Index] = Value
+			new_data[index] = value;
 		end
 	end
-	return NewTable
+	return new_data;
 end
 
-local function GetTimeStamp()
-	local Info = os.date("!*t")
-	local TimeStamp = "DATE: "..Info.year.."/"..Info.month.."/"..Info.day.." | TIME: "..(Info.hour > 12 and Info.hour - 12 or Info.hour)..":"..(Info.min < 10 and "0"..Info.min or Info.min)..":"..(Info.sec < 10 and "0"..Info.sec or Info.sec).." "..((Info.hour < 12 or Info.hour == 24) and "AM" or "PM")
-	return TimeStamp	
-end
-
-local function Debug(...)
-	if Configurations.Debug then
-		warn(script:GetFullName(), "\n", ...)
-	end
-end
-
-function Datastore:Write(Player, Directory, Value, Number)
-	if not Player or not CachedData[Player.UserId] or not CachedData[Player.UserId].Data then warn(script.Name, "Attempted to replicate to a non-existent player") return end
-	local Pointer = CachedData[Player.UserId].Data
-	local ParentPointer, LastIndex = nil, nil
-	local Paths = string.split(Directory, ".")
+local function request(player : Player, request_type : string, callback, new_thread : boolean)
 	
-	for i = 1, #Paths do
-		ParentPointer = Pointer;
-		local WorkingIndex = Pointer[Paths[i]] and Paths[i] or Pointer[tonumber(Paths[i])] and tonumber(Paths[i])
-		Pointer = Pointer[WorkingIndex];
-		LastIndex = WorkingIndex or Paths[i];
-		if not ParentPointer then
-			warn(script.Name, "Was unable to locate ", Paths[i], "in", ParentPointer, Pointer);
-			return false;	
-		end;
-	end;
-	
-	if Number then
-		ParentPointer = Pointer;
-		LastIndex = Number;
-		Pointer = Pointer[Number];
-	end
-	
-	ParentPointer[LastIndex] = Value;
-	-- Replicate After Value Has Changed;
-	Updater:FireAllClients(Player.UserId.."."..Directory, Value, Number)
-end
-
-function Datastore:Get(UserId)
-	while not CachedData[UserId] or not CachedData[UserId].Data do
-		RunService.Stepped:Wait()
-	end
-	return CachedData[UserId] and CachedData[UserId].Data or nil
-end
-
-function Datastore:Save(UserId, SessionEnd)
-	if not CachedData[UserId].Data then return end
-	if CachedData[UserId].IsSaving then return end
-	if not Configurations.StudioSave and RunService:IsStudio() then return end
-	
-	CachedData[UserId].IsSaving = true
-	local PlayerDatastore = DataStoreService:GetDataStore(tostring(UserId))
-	
-	local Success, Error = nil, nil
-	Success, Error = pcall(function()
-		PlayerDatastore:UpdateAsync("Data", function(OldData)
-			if OldData then
-				for Index, Value in next, CachedData[UserId].Data do
-					OldData[Index] = Value
-				end
-				
-				for Index, Value in next, OldData do
-					if not CachedData[UserId].Data[Index] then
-						OldData[Index] = nil
-					end
-				end
-				
-				if SessionEnd then
-					OldData.SessionData = nil
-					Debug(UserId.." Session Ending, removing session data")
-				end
-				
-				return OldData
-			end
-		end)
-	end)
-
-	CachedData[UserId].IsSaving = false
-	coroutine.resume(coroutine.create(function()
-		Datastore:Backup(UserId)
-	end))
-	if not Success then
-		Debug(UserId.." player data was unable to saved; "..Error)
-	else
-		Debug(UserId.." player data was saved")
-		if SessionEnd then
-			Debug(UserId.."'s Session Is Being Ended;")
-			--| Clean Up Function
-			coroutine.resume(coroutine.create(function()
-				local Player = game.Players:GetPlayerByUserId(UserId)
-				while Player do
-					RunService.Stepped:Wait()
-				end
-				Debug(UserId.."'s Data has been removed from cache.")
-				CachedData[UserId] = nil;
-			end))
+	if not cooldown_log[player] then
+		cooldown_log[player] = {};
+		for index, cooldown in pairs(constants.REQUEST_COOLDOWNS) do 
+			cooldown_log[player][index] = os.clock() - cooldown;
+			cooldown_log[player]["IS_"..index] = false;
 		end
 	end
-end
-
-function Datastore:Backup(UserId)
-	local PlayerBackupDatastore = DataStoreService:GetDataStore(tostring(UserId).." Backup")
-	local PlayerPointerDatastore = DataStoreService:GetOrderedDataStore(tostring(UserId))
-	if not CachedData[UserId] or not CachedData[UserId].Data then return end -- This means data was not loaded, don't save 
-	local Data = Copy(CachedData[UserId].Data)
 	
-	local Timestamp, Time = GetTimeStamp(), os.time()
-	local Success, Error = nil, nil
-	Success, Error = pcall(function()
-		PlayerPointerDatastore:SetAsync(Timestamp, Time)
-	end)
-	
-	if not Success then
-		Debug("Failed to set "..UserId.."'s pointer for backup data;"..Error)
-	else
-		Debug(UserId.." pointer data was set")
-		Success, Error = pcall(function()
-			PlayerBackupDatastore:SetAsync(Time, Data)
-		end)
+	if os.clock() - cooldown_log[player][request_type] >= constants.REQUEST_COOLDOWNS[request_type] 
+		and not cooldown_log[player]["IS_"..request_type] then
 		
-		if not Success then
-			Debug("Failed to create backup data for: "..UserId.."; "..Error)
-		else
-			Debug("Created back up data for: "..UserId)
-		end
-	end
-end
+		local function commit()
+			cooldown_log[player]["IS_"..request_type] = true;
+			local success, err, r = pcall(callback)
+			cooldown_log[player][request_type] = os.clock();
+			cooldown_log[player]["IS_"..request_type] = false;
 
-function Datastore:Remove(UserId) --| This will wipe a player's current data
-	local PlayerBackupDatastore = DataStoreService:GetDataStore(tostring(UserId).." Backup")
-	
-	local Success, Error = pcall(function()
-		PlayerBackupDatastore:SetAsync("Data", nil);
-	end)
-	
-	if not Success then
-		Debug("Failed to remove "..UserId.."'s data");
-	else
-		Debug("Successfully removed "..UserId.."'s data");
-	end
-end
-
-function Datastore:Restore(UserId, VersionHistory) -- Version History Is Obtained Through The Pointer Datastore.
-	local PlayerBackupDatastore = DataStoreService:GetDataStore(tostring(UserId).." Backup")
-	local PlayerDatastore = DataStoreService:GetDataStore(tostring(UserId))
-	local PlayerPointerDatastore = DataStoreService:GetOrderedDataStore(tostring(UserId))
-	
-	local CurrentPlayerData = nil;
-	local Success, Error = pcall(function()
-		CurrentPlayerData = PlayerDatastore:GetAsync("Data");
-	end)
-	
-	if Success then
-		if CurrentPlayerData then
-			--| Creates a back up before overwriting the main file
-			local Timestamp, Time = GetTimeStamp(), os.time()
-			local Success, Error = nil, nil
-			Success, Error = pcall(function()
-				PlayerPointerDatastore:SetAsync(Timestamp, Time)
-			end)
-
-			if not Success then
-				Debug("Failed to set "..UserId.."'s pointer for backup data;"..Error)
+			if not success then
+				debug_output(warn, string.format("\n[%s]: Failed Request Call For %s \n[Request Type]: %s\n[Warning]: %s", script.Name, tostring(player.UserId), request_type, err))
 			else
-				Debug(UserId.." pointer data was set")
-				Success, Error = pcall(function()
-					PlayerBackupDatastore:SetAsync(Time, CurrentPlayerData)
-				end)
-
-				if not Success then
-					Debug("Failed to create backup data for: "..UserId.."; "..Error)
-				else
-					Debug("Created back up data for: "..UserId)
-				end
-				
-				--| Now overwrite the acctual data
-				local BackupData
-				Success, Error = pcall(function()
-					BackupData = PlayerBackupDatastore:GetAsync(VersionHistory);
-				end)
-				
-				if not Success then
-					Debug("Failed to get backup data");
-					return
-				else
-					Debug("Backup data has been retrieved");
-					Success, Error = pcall(function()
-						PlayerDatastore:SetAsync("Data", BackupData)
-					end)
-					
-					if Success then
-						Debug("Successfully restored! New Data: ", BackupData, "Old Data: ", CurrentPlayerData)
-					end
-				end
+				debug_output(print, string.format("\n[%s]: Success Request Call For %s \n[Request Type]: %s", script.Name, tostring(player.UserId), request_type))
 			end
+			
+			return success, err
 		end
-	end
-end
-
-function Datastore:Load(UserId)
-	-- Datastores 
-	local PlayerBackupDatastore = DataStoreService:GetDataStore(tostring(UserId).." Backup")
-	local PlayerDatastore = DataStoreService:GetDataStore(tostring(UserId))
-	local PlayerPointerDatastore = DataStoreService:GetOrderedDataStore(tostring(UserId))
-	
-	coroutine.resume(coroutine.create(function()
-		local Player = game.Players:GetPlayerByUserId(UserId)
-		if Player then
-			local Unpacker = script.Parent.Assets.Unpacker:Clone()
-			Unpacker.Parent = Player:WaitForChild"PlayerGui"
-		end
-	end))
-	
-	CachedData[UserId] = {
-		LastSave = os.clock(),
-		IsSaving = false,
-	}	
-	
-	local Success, Error = nil, nil
-	while CachedData[UserId] and not CachedData[UserId].Data do
-		Success, Error = pcall(function()
-			PlayerDatastore:UpdateAsync("Data", function(OldData)
-				if OldData == nil then -- If OldData doesn't exist
-					OldData = {}
-					for Index, Value in next, StarterData do
-						OldData[Index] = Copy(Value.Data)
-					end
-					CachedData[UserId].Data = OldData
-					OldData.SessionData = {game.JobId, os.time()}
-					Debug(UserId.." had no data to begin with; locking session")
-					return OldData
-				else -- If There Was Previous Data
-					if not OldData.SessionData 
-						or OldData.SessionData[1] == game.JobId 
-						or os.time() - OldData.SessionData[2] >= 10 then
-						for Index, Value in next, StarterData do
-							if not OldData[Index] then
-								OldData[Index] = Value
-							end
-						end
-						CachedData[UserId].Data = OldData
-						OldData.SessionData = {game.JobId, os.time()}
-						Debug(UserId.." had previous data; locking session")
-						return OldData
-					else
-						Debug(UserId.." is in a session, unable to load.")
-						return nil -- Cancel it
-					end
-				end
-			end)
-		end)
 		
-		if not Success or CachedData[UserId] and not CachedData[UserId].Data then
-			Debug("Loading data was unsucccessful or was in session, yielding 6 and reiterating")
-			wait(6)
+		if new_thread then
+			task.spawn(commit)
+		else
+			return commit()
+		end
+	else
+		if not constants.IGNORE_COOLDOWN_MESSAGE then
+			debug_output(warn, string.format("\n[%s]: Failed Request Call For %s \n[Request Type]: %s\n[Warning]: %s", script.Name, tostring(player.UserId), request_type, "On Cooldown Or Already Reading"))
+		end	
+		return false, "On cooldown";
+	end
+end
+
+
+local total_connections = 0;
+function datastore_module:on_change(change_function : any)
+	local connection_id = tostring(total_connections + 1);
+	total_connections += 1;
+	
+	self.connections[connection_id] = change_function;
+	
+	return {
+		Disconnect = function()
+			self.connections[connection_id] = nil
+		end,
+	}
+end
+
+function datastore_module:increment(increment_value : number)
+	local userid = self.player.UserId;
+
+	if data_cache[userid] then
+		local index_splitted = string.split(self.branch_index, "/")
+		local indexed = true;
+		local data_memory_reference = data_cache[userid][MASTER_KEY]
+		for i = 1, #index_splitted - 1 do 
+			local index = index_splitted[i];
+			if not data_memory_reference[index] then
+				debug_output(warn, string.format("\n[%s]: Failed to index %s because it does not exist", script.Name, index))
+				indexed = false;
+				break;
+			else
+				data_memory_reference = data_memory_reference[index];
+			end
+		end
+		
+		if not indexed then
+			return nil;
+		else
+			if typeof(data_memory_reference[index_splitted[#index_splitted]]) == "number" then
+
+				data_memory_reference[index_splitted[#index_splitted]] += increment_value;
+
+				for _, change_function in pairs(self.connections) do 
+					change_function(data_memory_reference[index_splitted[#index_splitted]])
+				end
+
+				if not data_cache[userid].session_end_saving then
+					-- we will only attempt to update values if session is not ending. If it is, we will only edit the value.
+					request(self.player, "WRITE", function()
+						datastore:UpdateAsync(userid, function(old_data)
+							local save_data = deep_copy(data_cache[userid][MASTER_KEY])
+							save_data.session_updated = os.time()
+							return save_data
+						end)
+					end, true)
+				end
+				return data_memory_reference[index_splitted[#index_splitted]]
+			else
+				warn(string.format("[%s]: attempted to increment non-numeric value for '%s', please check :increment() calls.", script.Name, self.branch_index))
+				return nil;
+			end
+		end
+	end
+end
+
+function datastore_module:set(new_value : any)
+	local userid = self.player.UserId;
+	
+	if data_cache[userid] then
+		local index_splitted = string.split(self.branch_index, "/")
+		local indexed = true;
+		local data_memory_reference = data_cache[userid][MASTER_KEY]
+		for i = 1, #index_splitted - 1 do 
+			local index = index_splitted[i];
+			if not data_memory_reference[index] then
+				debug_output(warn, string.format("\n[%s]: Failed to index %s because it does not exist", script.Name, index))
+				indexed = false;
+				break;
+			else
+				data_memory_reference = data_memory_reference[index];
+			end
+		end
+
+		if not indexed then
+			return nil;
+		else
+			data_memory_reference[index_splitted[#index_splitted]] = new_value;
+			
+			for _, change_function in pairs(self.connections) do 
+				change_function(new_value)
+			end
+			
+			if not data_cache[userid].session_end_saving then
+				-- we will only attempt to update values if session is not ending. If it is, we will only edit the value.
+				request(self.player, "WRITE", function()
+					datastore:UpdateAsync(userid, function(old_data)
+						local save_data = deep_copy(data_cache[userid][MASTER_KEY])
+						save_data.session_updated = os.time()
+						return save_data
+					end)
+				end, true)
+			end
+			return data_memory_reference[index_splitted[#index_splitted]]
+		end
+	end
+end
+
+function datastore_module:get(default_value : any)
+	local userid = self.player.UserId;
+	
+	if not data_cache[userid] then
+		-- if the user just joined. We will retrieve their masterkey data.	
+		local success, error, data
+		local in_session = true;
+		while not success or in_session do 
+			success, error = request(self.player, "READ", function()
+				data = datastore:UpdateAsync(userid, function(old_data)
+					if not old_data then
+						old_data = {};
+						in_session = false;
+					elseif (not old_data.in_session) or os.time() - old_data.session_updated >= 600 then
+						in_session = false;
+					end
+					
+					if not in_session then
+						old_data.in_session = true;
+						old_data.session_updated = os.time();
+					end
+					
+					if self.player and self.player.Parent == players then
+						local bindable = Instance.new("BindableEvent");
+						bindable.Name = userid.."_session_end_bindable";
+						bindable.Parent = script.session_end_bindables;
+						
+						return old_data;
+					else
+						debug_output(warn, string.format("[%s] %s left the game while retrieving data. Changes cancelled.", script.Name, tostring(userid)))
+						return nil
+					end
+				end);
+				
+				-- update master key
+				data_cache[userid] = {
+					[MASTER_KEY] = data,
+					session_end_saving = false,
+				}
+			end)
+			task.wait();
+			
+			if in_session then
+				debug_output(warn, string.format("[%s]: Failed to retrieve %s data because they are session locked.", script.Name, tostring(userid)))
+			elseif not success then
+				debug_output(warn, string.format("[%s]: Failed to retrieve %s data because %s", script.Name, tostring(userid), error))
+			end	
 		end
 	end
 	
-	local Player = game.Players:GetPlayerByUserId(UserId)
-	if not Success then
-		if Player then
-			Player:Kick("We couldn't load your data, in order to prevent deleting your data we must kick you. If this is occuring multiple times please contact Mystifine#4924")
+	if self.player and self.player.Parent == players then
+		local index_splitted = string.split(self.branch_index, "/")
+		local indexed = true;
+		local data_memory_reference = data_cache[userid][MASTER_KEY]
+		for i = 1, #index_splitted - 1 do 
+			local index = index_splitted[i];
+			if not data_memory_reference[index] then
+				debug_output(warn, string.format("\n[%s]: Failed to index %s because it does not exist", script.Name, index))
+				indexed = false;
+				break;
+			else
+				data_memory_reference = data_memory_reference[index];
+			end
 		end
-		Debug(UserId.." player data was unable to loaded; "..Error)
-	else
-		coroutine.resume(coroutine.create(function()
-			if Player then
-				--| Initial Replication To Local Player;
-				for _, Client in next, game.Players:GetPlayers() do
-					local FilteredData = {}
-					local Data = CachedData[Client.UserId].Data
-					if Data then
-						for Index, Data in next, Data do
-							if not StarterData[Index]
-								or not StarterData[Index].Replication
-								or StarterData[Index].Replication == "Global"
-								or StarterData[Index].Replication == "Local" and Client.UserId == Player.UserId then
-								FilteredData[Index] = Data;
-							end
-						end
-						Updater:FireClient(Player, tostring(Client.UserId), FilteredData)
-					end
-				end
-				
-				--| Replicate New Player Data to Other Player's
-				for _, Client in next, game.Players:GetPlayers() do
-					local FilteredData = {}
-					local Data = CachedData[UserId].Data
-					if Data then
-						for Index, Data in next, Data do
-							if not StarterData[Index]
-								or not StarterData[Index].Replication
-								or StarterData[Index].Replication == "Global"
-								or StarterData[Index].Replication == "Local" and Client.UserId == Player.UserId then
-								FilteredData[Index] = Data;
-							end
-						end
-						Updater:FireClient(Player, tostring(UserId), FilteredData)
-					end
-				end
+		
+		if not indexed then
+			return nil;
+		else
+			if not data_memory_reference[index_splitted[#index_splitted]] then
+				data_memory_reference[index_splitted[#index_splitted]] = default_value;
 			end
 			
-			--| Replication To Other Users.
-			
-			Datastore:Backup(UserId)
-		end))
-		Debug(UserId.." player data was loaded")
-	end
-end
-
-local function GetIndexCount(Table)
-	local Count = 0;
-	for _, _ in next, Table do
-		Count += 1;
-	end
-	return Count;
-end
-
-game:BindToClose(function()
-	for _, Player in ipairs(game.Players:GetPlayers()) do
-		Datastore:Save(Player.UserId, true)
-	end
-	if Configurations.StudioSave and RunService:IsStudio() or not RunService:IsStudio() then
-		--| Will Yield Until All Players Are GONE
-		while GetIndexCount(CachedData) > 0 do
-			RunService.Stepped:Wait()
+			return data_memory_reference[index_splitted[#index_splitted]]
 		end
 	end
+end
+
+local function session_end_save(player : Player)
+	local userid = player.UserId;
+	
+	local session_end_bindable = script.session_end_bindables:FindFirstChild(userid.."_session_end_bindable")
+	if data_cache[userid] and not data_cache[userid].session_end_saving and session_end_bindable then
+		data_cache[userid].session_end_saving = true;
+		
+		for _, callback in pairs(before_last_save_functions) do 
+			callback(player);
+		end
+		
+		local success, error
+		while not success do 
+			success, error = request(player, "WRITE", function()
+				datastore:UpdateAsync(userid, function(old_data)
+					local data = deep_copy(data_cache[userid][MASTER_KEY])
+					data.in_session = nil;
+					data.session_updated = nil;
+					return data;
+				end);
+			end)
+
+			if success then
+				debug_output(print, string.format("[%s]: Successfully Ended Session Save For %s", script.Name, tostring(userid)))
+			end
+			
+			task.wait();
+		end
+		
+		session_end_bindable:Fire();
+		data_cache[userid] = nil;
+		cooldown_log[userid] = nil;
+		objects_cache[userid] = nil;
+		session_end_bindable:Destroy()
+	end
+end
+
+local function player_added(player : Player)
+	player.AncestryChanged:Connect(function(_, parent)
+		if parent == nil then
+			session_end_save(player)
+		end
+	end)
+end
+
+players.PlayerRemoving:Connect(function(player : Player)
+	session_end_save(player);
 end)
+players.PlayerAdded:Connect(player_added);
+for _, player in ipairs(players:GetPlayers()) do player_added(player) end;
 
-coroutine.resume(coroutine.create(function()
-	while true do				
-		for UserId, Data in next, CachedData do			
-			if os.clock() - Data.LastSave >= 10 and Configurations.AutoSave then
-				coroutine.resume(coroutine.create(function()
-					Datastore:Save(UserId)
-					Data.LastSave = os.clock()
-				end))
-			end
+if not runservice:IsStudio() or STUDIO_SAVE then
+	game:BindToClose(function()
+		local to_save_counter = #script.session_end_bindables:GetChildren();
+		local saved_counter = 0;
+		for _, session_end_bindable in pairs(script.session_end_bindables:GetChildren()) do 
+			session_end_bindable.Event:Connect(function()
+				saved_counter += 1;
+			end)
 		end
-		RunService.Stepped:Wait()
-	end
-end))
+		
+		for _, player in pairs(players:GetPlayers()) do 
+			task.spawn(session_end_save, player);
+		end
+		
+		while saved_counter < to_save_counter do
+			task.wait();
+		end
+	end)
+end
 
-return Datastore
+return {
+	new = function(branch_index : string, player : Player)
+		if not objects_cache[player.UserId] then
+			objects_cache[player.UserId] = {};
+		end
+		
+		local data_object = objects_cache[player.UserId][branch_index] or {
+			branch_index = branch_index;
+			player = player;
+			connections = {},
+		}
+		
+		setmetatable(data_object, {__index = datastore_module});
+		objects_cache[player.UserId][branch_index] = data_object;
+		return data_object
+	end,
+	remove_data = function(userid : number)
+		local success, error = pcall(function()
+			datastore:RemoveAsync(userid)
+		end)
+
+		if success then
+			print(string.format("[%s]: %s's data has been successfully removed.", script.Name, tostring(userid)))
+		else
+			warn(string.format("[%s]: %s's data has been failed to be removed.", script.Name, tostring(userid)))
+		end
+	end,
+	before_last_save = function(callback)
+		table.insert(before_last_save_functions, callback)
+	end,
+}
