@@ -122,7 +122,7 @@ function datastore_module:increment(increment_value : number)
 				data_memory_reference[index_splitted[#index_splitted]] += increment_value;
 
 				for _, change_function in pairs(self.connections) do 
-					change_function(data_memory_reference[index_splitted[#index_splitted]])
+					task.spawn(change_function, data_memory_reference[index_splitted[#index_splitted]]) 
 				end
 
 				if not data_cache[userid].session_end_saving then
@@ -168,7 +168,7 @@ function datastore_module:set(new_value : any)
 			data_memory_reference[index_splitted[#index_splitted]] = new_value;
 			
 			for _, change_function in pairs(self.connections) do 
-				change_function(new_value)
+				task.spawn(change_function, new_value) 
 			end
 			
 			if not data_cache[userid].session_end_saving then
