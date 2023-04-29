@@ -77,7 +77,7 @@ local function request(player : Player, request_type : string, callback, new_thr
 		if not constants.IGNORE_COOLDOWN_MESSAGE then
 			debug_output(warn, string.format("\n[%s]: Failed Request Call For %s \n[Request Type]: %s\n[Warning]: %s", script.Name, tostring(player.UserId), request_type, "On Cooldown Or Already Reading"))
 		end	
-		return false, "On cooldown";
+		return false, "on cooldown";
 	end
 end
 
@@ -122,7 +122,7 @@ function datastore_module:increment(increment_value : number)
 				data_memory_reference[index_splitted[#index_splitted]] += increment_value;
 
 				for _, change_function in pairs(self.connections) do 
-					task.spawn(change_function, data_memory_reference[index_splitted[#index_splitted]]) 
+					change_function(data_memory_reference[index_splitted[#index_splitted]])
 				end
 
 				if not data_cache[userid].session_end_saving then
@@ -168,7 +168,7 @@ function datastore_module:set(new_value : any)
 			data_memory_reference[index_splitted[#index_splitted]] = new_value;
 			
 			for _, change_function in pairs(self.connections) do 
-				task.spawn(change_function, new_value) 
+				change_function(new_value)
 			end
 			
 			if not data_cache[userid].session_end_saving then
@@ -189,50 +189,65 @@ end
 function datastore_module:get(default_value : any)
 	local userid = self.player.UserId;
 	
-	if not data_cache[userid] then
+	if not data_cache[userid] and not self.player:GetAttribute("retrieving_player_data") then
+		self.player:SetAttribute("retrieving_player_data", true)
 		-- if the user just joined. We will retrieve their masterkey data.	
 		local success, error, data
 		local in_session = true;
-		while not success or in_session do 
+		while (not success or in_session) do 
+			
 			success, error = request(self.player, "READ", function()
 				data = datastore:UpdateAsync(userid, function(old_data)
 					if not old_data then
 						old_data = {};
 						in_session = false;
-					elseif (not old_data.in_session) or os.time() - old_data.session_updated >= 600 then
+					elseif (old_data.session_id == nil) or os.time() - old_data.session_updated >= constants.MAX_RETRY_DURATION then
 						in_session = false;
 					end
-					
 					if not in_session then
-						old_data.in_session = true;
+						old_data.session_id = game.JobId;
 						old_data.session_updated = os.time();
 					end
 					
 					if self.player and self.player.Parent == players then
-						local bindable = Instance.new("BindableEvent");
-						bindable.Name = userid.."_session_end_bindable";
-						bindable.Parent = script.session_end_bindables;
-						
 						return old_data;
 					else
 						debug_output(warn, string.format("[%s] %s left the game while retrieving data. Changes cancelled.", script.Name, tostring(userid)))
 						return nil
 					end
 				end);
-				
-				-- update master key
-				data_cache[userid] = {
-					[MASTER_KEY] = data,
-					session_end_saving = false,
-				}
 			end)
-			task.wait();
 			
-			if in_session then
-				debug_output(warn, string.format("[%s]: Failed to retrieve %s data because they are session locked.", script.Name, tostring(userid)))
+			if success and in_session then
+				local time_left = constants.MAX_RETRY_DURATION - (os.time() - data.session_updated)
+				debug_output(warn, 
+					string.format(
+						"[%s]: Failed to retrieve %s data because they are session locked (%s second(s) left).", 
+						script.Name, 
+						tostring(userid), 
+						tostring(time_left)
+					)
+				)
 			elseif not success then
 				debug_output(warn, string.format("[%s]: Failed to retrieve %s data because %s", script.Name, tostring(userid), error))
 			end	
+			task.wait();
+		end
+		
+		-- update master key
+		data_cache[userid] = {
+			[MASTER_KEY] = data,
+			session_end_saving = false,
+		}
+				
+		local bindable = Instance.new("BindableEvent");
+		bindable.Name = userid.."_session_end_bindable";
+		bindable.Parent = script.session_end_bindables;
+		
+		self.player:SetAttribute("retrieving_player_data", nil)
+	elseif self.player:GetAttribute("retrieving_player_data") then
+		while self.player:GetAttribute("retrieving_player_data") do 
+			task.wait()
 		end
 	end
 	
@@ -274,12 +289,13 @@ local function session_end_save(player : Player)
 			callback(player);
 		end
 		
+		local now = os.clock();
 		local success, error
-		while not success do 
+		while not success and os.clock() - now < constants.MAX_RETRY_DURATION do 
 			success, error = request(player, "WRITE", function()
 				datastore:UpdateAsync(userid, function(old_data)
 					local data = deep_copy(data_cache[userid][MASTER_KEY])
-					data.in_session = nil;
+					data.session_id = nil;
 					data.session_updated = nil;
 					return data;
 				end);
