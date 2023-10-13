@@ -338,11 +338,6 @@ local function playerAdded(player : Player)
 			end
 			player_state_cache[userID].data_loaded = true;
 			
-			local data_loaded = Instance.new("BoolValue");
-			data_loaded.Value = true;
-			data_loaded.Name = "data_loaded";
-			data_loaded.Parent = player;
-			
 			output(print, string.format("[%s]: %d's data has been loaded.", script.Name, userID))
 		else
 			requestRemoveDatastoreRequest(userID, session_lock_datastore, userID)
