@@ -1,21 +1,27 @@
 -- services
 local players = game.Players;
-local datastoreservice = game:GetService("DataStoreService");
+local datastoreservice : DataStoreService = game:GetService("DataStoreService");
 
-local session_lock_datastore = datastoreservice:GetDataStore("session_lock_data")
+local session_lock_datastore : DataStore = datastoreservice:GetDataStore("session_lock_data")
 
-local player_datastore = {}
+local player_datastore : {} = {}
 
 local datastore_settings = require(script.datastore_settings);
 
-local player_data_cache = {};
-local player_state_cache = {};
+local player_data_cache : {} = {};
+local player_state_cache : {} = {};
 
-local starter_data_set = false;
-local server_shutting_down = false;
+local starter_data_set : boolean = false;
+local server_shutting_down : boolean = false;
 local STARTER_DATA
 
-local function deepCopy(value : any)
+--[[
+	deepCopy
+	
+	@param value any value to deep copy
+	@return the deep copied value could be nil
+]]
+local function deepCopy(value : any) : {}?
 	local copy = {};
 
 	if typeof(value) ~= "table" then
@@ -29,124 +35,90 @@ local function deepCopy(value : any)
 	return copy
 end
 
-local function output(output_function : Function, ...)
+--[[
+	output
+	
+	@param output_function a callback / function for outputting data
+	@param ... additional arguments for printing
+	@return nil
+]]
+local function output(outputFunction : () -> unknown?, ...) : nil
 	if datastore_settings.DEBUG_MODE then
-		output_function(...);
+		outputFunction(...);
 	end
 end
 
-local function waitForDatastoreBudget(request_type : Enum.DataStoreRequestType)
+--[[
+	waitForDatastoreBudget
+	
+	Yields current thread until there is enough budget to continue
+
+	@param request_type Enum.DataStoreRequestType to yield for
+	@return nil
+]]
+local function waitForDatastoreBudget(request_type : Enum.DataStoreRequestType) : nil
 	local budget = datastoreservice:GetRequestBudgetForRequestType(request_type)
+	output(print, string.format("[%s Budget]: %d", request_type.Name, budget));
 	while budget < 0 do 
 		budget = datastoreservice:GetRequestBudgetForRequestType(request_type);
 		task.wait()
 	end
 end
 
-local function requestGetDatastoreRequest(userID : number, datastore, request_type : string, key : string?)
-	-- we are retrieving the last_data_key for the user
-	local success, result
-	while (not success and players:GetPlayerByUserId(userID)) do 
-		if datastore.ClassName == "OrderedDataStore" then
-			waitForDatastoreBudget(Enum.DataStoreRequestType.GetSortedAsync);
-		elseif datastore.ClassName == "DataStore" then
-			waitForDatastoreBudget(Enum.DataStoreRequestType.GetAsync);
-		end	
-
-		success, result = pcall(function()
-			local data
-			if datastore.ClassName == "OrderedDataStore" then
-				data = datastore:GetSortedAsync(false, 1)
-			elseif datastore.ClassName == "DataStore" then
-				data = datastore:GetAsync(key)
+--[[
+	requestDatastoreRequest
+	
+	@param userid the user id 
+	@param request_type the datastore request_type to perform, one of the indexes in REQUEST_PER_MINUTE 
+	@return boolean, result the success and result of the protected call
+]]
+local function requestDatastoreRequest(userid : number, request_type : string, datastore_request_type : Enum.DataStoreRequestType, protectedCall : () -> any?, session_end : boolean)
+	local success : boolean, result : any? = false, nil; 
+	
+	-- we will keep trying while we are not successful and session end is true or player exists
+	while (not success and (session_end or players:GetPlayerByUserId(userid))) do
+		-- make sure we are not going over the limit;
+		waitForDatastoreBudget(datastore_request_type);
+		
+		success, result = pcall(protectedCall);
+		
+		if not success then
+			if (session_end) then
+				-- will wait to try again
+				output(warn, string.format("[%s]: (Session End) Failed to %s for %d. Request Type: %s, error: %s", script.Name, datastore_request_type.Name, userid, request_type, tostring(result)))
+			elseif not session_end and not players:GetPlayerByUserId(userid) then
+				output(warn, string.format("[%s]: %d user left while trying to %s", script.Name, userid, datastore_request_type.Name))
+			elseif (not session_end and players:GetPlayerByUserId(userid)) then
+				-- we will yield if we need the player as its not urget based on session end;
+				local yield_duration : number = 60 / datastore_settings.REQUEST_PER_MINUTE[request_type];
+				task.wait(yield_duration)
+				output(warn, string.format("[%s]: Failed to %s for %d. Request Type: %s, error: %s", script.Name, datastore_request_type.Name, userid, request_type, tostring(result)))
 			end
-
-			return data
-		end)
-
-		if (not success and players:GetPlayerByUserId(userID)) then
-			output(warn, string.format("[%s]: Failed to %s for %d, error: %s", script.Name, request_type, userID, tostring(result)))
-			task.wait(60/datastore_settings.REQUEST_PER_MINUTE[request_type])	
-		elseif (not success and not players:GetPlayerByUserId(userID)) then
-			output(warn, string.format("[%s]: %d user left while trying to %s", script.Name, userID, request_type))
 		end
 	end
+	
 	return success, result;
 end
 
-local function requestSetDatastoreRequest(userID : number, datastore, key : string?, value : any)
-	local success, result
-	local now, timeout = os.clock(), (datastore_settings.SESSION_LOCK_TIMEOUT/2);
-	while (not success and os.clock() - now < timeout) do 
-		if datastore.ClassName == "OrderedDataStore" then
-			waitForDatastoreBudget(Enum.DataStoreRequestType.SetIncrementSortedAsync)
-		elseif datastore.ClassName == "DataStore" then
-			waitForDatastoreBudget(Enum.DataStoreRequestType.SetIncrementAsync)
-		end
 
-		success, result = pcall(function()
-			return datastore:SetAsync(key, value);
-		end)
-
-		if not success then
-			output(warn, string.format("[%s]: Failed to %s for %d, error: %s", script.Name, "SetAsync", userID, tostring(result)))
-			task.wait(60/datastore_settings.REQUEST_PER_MINUTE.SetAsync)
-		end
-	end
-	return success, result
-end
-
-local function requestUpdateDatastoreRequest(userID : number, datastore, key : string?, callback : Function)
-	-- we are retrieving the last_data_key for the user
-	local success, result
-	while (not success and players:GetPlayerByUserId(userID)) do 
-		if datastore.ClassName == "DataStore" then
-			waitForDatastoreBudget(Enum.DataStoreRequestType.UpdateAsync);
-		elseif datastore.ClassName == "OrderedDataStore" then
-			waitForDatastoreBudget(Enum.DataStoreRequestType.UpdateAsync);
-		end	
-
-		success, result = pcall(function()
-			local data = datastore:UpdateAsync(key, callback)
-			return data
-		end)
-
-		if (not success and players:GetPlayerByUserId(userID)) then
-			output(warn, string.format("[%s]: Failed to %s for %d, error: %s", script.Name, "UpdateAsync", userID, tostring(result)))
-			task.wait(60/datastore_settings.REQUEST_PER_MINUTE["UpdateAsync"])	
-		elseif (not success and not players:GetPlayerByUserId(userID)) then
-			output(warn, string.format("[%s]: %d user left while trying to %s", script.Name, userID, "UpdateAsync"))
-		end
-	end
-	return success, result;
-end
-
-local function requestRemoveDatastoreRequest(userID : number, datastore, key : string?)
-	local success, result
-	while not success do 
-		if datastore.ClassName == "OrderedDataStore" then
-			waitForDatastoreBudget(Enum.DataStoreRequestType.SetIncrementSortedAsync)
-		elseif datastore.ClassName == "DataStore" then
-			waitForDatastoreBudget(Enum.DataStoreRequestType.SetIncrementAsync)
-		end
-
-		success, result = pcall(function()
-			return datastore:RemoveAsync(key);
-		end)
-
-		if not success then
-			output(warn, string.format("[%s]: Failed to %s for %d, error: %s", script.Name, "RemoveAsync", userID, tostring(result)))
-			task.wait(60/datastore_settings.REQUEST_PER_MINUTE.RemoveAsync)
-		end
-	end
-	return success, result
-end
-
-local function getDatastore(userID : number)
-	local datastore, ordered_datastore = datastoreservice:GetDataStore(userID..datastore_settings.VERSION), datastoreservice:GetOrderedDataStore(userID..datastore_settings.VERSION);
+--[[
+	getDatastore
+	
+	@param userid the userid to retrieve data from
+	@return datastore, ordered_datastore corresponding to provided userid
+]]
+local function getDatastore(userid : number) : ...any
+	local datastore, ordered_datastore = datastoreservice:GetDataStore(userid..datastore_settings.VERSION), datastoreservice:GetOrderedDataStore(userid..datastore_settings.VERSION);
 	return datastore, ordered_datastore;
 end
 
+--[[
+	getESTDate
+	
+	retrieves time in EST;
+	
+	@return os.date of time in EST
+]]
 local function getESTDate()
 	local utc_time = os.time()
 
@@ -168,7 +140,13 @@ local function getESTDate()
 	return est_date;
 end
 
-local function formatTimeWithAMPM(date_table)
+--[[
+	formatTimeWithAMPM
+	
+	@param date_table the os.date table
+	@return formatted string with AM/PM
+]]
+local function formatTimeWithAMPM(date_table) : string
 	local am_pm = "AM"
 	local hour = date_table.hour
 
@@ -186,74 +164,121 @@ local function formatTimeWithAMPM(date_table)
 		date_table.year, date_table.month, date_table.day, hour, date_table.min, date_table.sec, am_pm)
 end
 
-function player_datastore.get(player : Player)
-	local userID = player.UserId;
+--[[
+	player_datastore.get
 	
-	while players:GetPlayerByUserId(userID) and (not player_state_cache[userID] or not player_state_cache[userID].data_loaded) do 
+	@param player the player object
+	@return cached player data
+]]
+function player_datastore.get(player : Player) : {}?
+	local userid : number = player.UserId;
+	
+	while players:GetPlayerByUserId(userid) and (not player_state_cache[userid] or not player_state_cache[userid].data_loaded) do 
 		task.wait()
 	end	
 	
-	return player_data_cache[userID];
+	return player_data_cache[userid];
 end
 
-function player_datastore.save(userID : number, session_end : boolean)
-	if not player_state_cache[userID] or not player_state_cache[userID].data_loaded then return end;
-	if session_end and player_state_cache[userID].session_end_saving then return end;
-	if not player_data_cache[userID] then return end;
+--[[
+	player_datastore.save
+	
+	@param userid the player userid
+	@param session_end boolean indicating session_end
+]]
+function player_datastore.save(userid : number, session_end : boolean)
+	if not player_state_cache[userid] or not player_state_cache[userid].data_loaded then return end;
+	if session_end and player_state_cache[userid].session_end_saving then return end;
+	if not session_end and player_state_cache[userid].session_end_saving then return end; -- we will not save if we are session end saving
+	if not player_data_cache[userid] then return end;
 
-	local data_to_save = deepCopy(player_data_cache[userID])
+	local data_to_save : {}? = deepCopy(player_data_cache[userid])
 
-	local datastore, ordered_datastore = getDatastore(userID)
+	local datastore : DataStore, ordered_datastore : OrderedDataStore = getDatastore(userid)
 
-	if (not session_end and not player_state_cache[userID].is_saving) or session_end then
-		player_state_cache[userID].is_saving = true;
+	if (not session_end and not player_state_cache[userid].is_saving) or session_end then
+		player_state_cache[userid].is_saving = true;
 		
-		if session_end and not player_state_cache[userID].session_end_saving then
-			player_state_cache[userID].session_end_saving = true;
+		if session_end and not player_state_cache[userid].session_end_saving then
+			player_state_cache[userid].session_end_saving = true;
 		end
 		
-		local current_time = os.time();
-		local est_date_time_str = formatTimeWithAMPM(getESTDate())
+		local current_time : number = os.time();
+		local est_date_time_str : string = formatTimeWithAMPM(getESTDate())
 
-		local success, result = requestSetDatastoreRequest(userID, ordered_datastore, est_date_time_str, current_time)
-		if success then
-			success, result = requestSetDatastoreRequest(userID, datastore, current_time, data_to_save)
-			if success then
+		-- first save to our ordered datastore logs
+		local success_ordered_datastore_save : boolean, result : any? = requestDatastoreRequest(userid, "Set", Enum.DataStoreRequestType.SetIncrementSortedAsync, function()
+			return ordered_datastore:SetAsync(est_date_time_str, current_time);
+		end, session_end)
+		
+		if success_ordered_datastore_save then
+			local success_datastore_save, _ = requestDatastoreRequest(userid, "Set", Enum.DataStoreRequestType.SetIncrementAsync, function()
+				return datastore:SetAsync(current_time, data_to_save)
+			end, session_end)
+			
+			-- this is succesful data saving
+			if success_datastore_save then
 				if not session_end then
-					output(print, string.format("[%s]: %d's data has been auto-saved.", script.Name, userID))
+					player_state_cache[userid].last_save = os.time()
+					player_state_cache[userid].is_saving = false;
+					output(print, string.format("[%s]: %d's data has been auto-saved.", script.Name, userid))
 				else
-					output(print, string.format("[%s]: %d's session is ending. Data has been saved.", script.Name, userID))
+					-- initially make reference to player_bindable
+					local player_bindable : BindableEvent = player_state_cache[userid].player_bindable
+
+					-- first, we will clear the player server data to prevent any form of manipulation with it
+					player_data_cache[userid] = nil;
+					player_state_cache[userid] = nil;
+
+					-- next we will request to remove the session lock 
+					local success_session_lock_remove : boolean = requestDatastoreRequest(userid, "Remove", Enum.DataStoreRequestType.SetIncrementAsync, function()
+						return session_lock_datastore:RemoveAsync(userid);
+					end, session_end)
+
+					-- if we ended the session then we will finish with this player
+					if success_session_lock_remove then
+						-- finally we will signal that we are complete and let the server die
+						player_bindable:Fire();
+						player_bindable:Destroy();
+						
+						output(print, string.format("[%s]: %d's session has been ended. Data has been saved.", script.Name, userid))
+					end
 				end		
 			end	
 		end
-		if not session_end then
-			player_state_cache[userID].last_save = os.time()
-			player_state_cache[userID].is_saving = false;
-		else
-			player_state_cache[userID].player_bindable:Fire();
-			player_state_cache[userID].player_bindable:Destroy();
-			player_data_cache[userID] = nil;
-			player_state_cache[userID] = nil;
-			local success = requestRemoveDatastoreRequest(userID, session_lock_datastore, userID)
-			if success then
-				output(print, string.format("[%s]: %d's session has been ended.", script.Name, userID))
-			end	
-		end
+	
 	end
 end
 
+--[[
+	player_datastore.setStarterData
+	
+	@param starter_data the player starter data 
+	@return nil
+]]
 function player_datastore.setStarterData(starter_data : any)
 	STARTER_DATA = deepCopy(starter_data)
 	starter_data_set = true;
 end
 
-function player_datastore.getPlayerState(userID : number, state : string)
-	while players:GetPlayerByUserId(userID) and not player_state_cache[userID] do 
+--[[
+	player_datastore.getPlayerState
+	
+	@param userid the player userid
+	@param state the player state
+]]
+function player_datastore.getPlayerState(userid : number, state : string)
+	while players:GetPlayerByUserId(userid) and not player_state_cache[userid] do 
 		task.wait()
 	end
-	return player_state_cache[userID][state];
+	return player_state_cache[userid][state];
 end
 
+--[[
+	playerAdded
+	
+	@param player the added player
+]]
 local function playerAdded(player : Player)
 	-- wait for starter_data to be set.
 	while not starter_data_set do 
@@ -261,14 +286,14 @@ local function playerAdded(player : Player)
 		task.wait()
 	end
 	
-	local userID = player.UserId;
+	local userid : number = player.UserId;
 	
-	local player_bindable = Instance.new("BindableEvent");
+	local player_bindable : BindableEvent = Instance.new("BindableEvent");
 	player_bindable.Name = player.Name;
 	player_bindable.Parent = script.player_bindables;
 	
 	-- we want to create a state_cache for the player.
-	player_state_cache[userID] = {
+	player_state_cache[userid] = {
 		is_saving = false,
 		last_save = os.time(),
 		session_end_saving = false,
@@ -277,85 +302,104 @@ local function playerAdded(player : Player)
 	}
 
 	-- when a player joins, we should retrieve their data.
-	local datastore, ordered_datastore = getDatastore(userID);
+	local datastore : DataStore, ordered_datastore : OrderedDataStore = getDatastore(userid);
 	
 	-- this section will wait until their session data is retrieved AND they are not in session
-	local success, is_session_locked = false, false;
+	local success : boolean, result : any?, is_session_locked : boolean = false, false, false;
 	-- while request is not successful and the player still exists or there is session data but player is locked in session we will yield
-	while (not success and players:GetPlayerByUserId(userID)) or (success and is_session_locked and players:GetPlayerByUserId(userID)) do 
-		success, _ = requestUpdateDatastoreRequest(userID, session_lock_datastore, userID, function(old_data : {})
-			if not old_data then
-				-- we do not have a session,
-				is_session_locked = false;
-				output(print, string.format("[%s]: %d is not session locked. Session has been established.", script.Name, userID))
-				return {
-					last_update = os.time();
-					server = game.JobId;	
-				}
-			elseif old_data then
-				if os.time() - old_data.last_update >= datastore_settings.SESSION_LOCK_TIMEOUT then
-					-- you are not in session lock;
-					output(print, string.format("[%s]: %d is not session locked. (session timed out)", script.Name, userID))
+	while (not success and players:GetPlayerByUserId(userid)) or (success and is_session_locked and players:GetPlayerByUserId(userid)) do 
+		success, _ = requestDatastoreRequest(userid, "Set", Enum.DataStoreRequestType.UpdateAsync, function()
+			return session_lock_datastore:UpdateAsync(userid, function(old_data : {}?)
+				if not old_data then
+					-- we do not have a session,
 					is_session_locked = false;
-				else
-					output(print, string.format("[%s]: %d is session locked.", script.Name, userID))
-					-- you are in session lock.
-					is_session_locked = true
+					output(print, string.format("[%s]: %d is not session locked. Session has been established.", script.Name, userid))
+					return {
+						last_update = os.time();
+						server = game.JobId;	
+					}
+				elseif old_data then
+					if os.time() - old_data.last_update >= datastore_settings.SESSION_LOCK_TIMEOUT then
+						-- you are not in session lock;
+						output(print, string.format("[%s]: %d is not session locked. (session timed out)", script.Name, userid))
+						is_session_locked = false;
+					else
+						local time_left : number = datastore_settings.SESSION_LOCK_TIMEOUT - (os.time() - old_data.last_update)
+						output(print, string.format("[%s]: %d is session locked. (%d Second(s))", script.Name, userid, time_left))
+						-- you are in session lock. 
+						is_session_locked = true
+					end
 				end
-			end
-		end);
+			end)
+		end)
 
-		-- we want to wait depending on the situation. If they are session locked we will wait longer because it is unlikely timeout has occured
+		-- We can use a small wait because requestDatastoreRequest will yield
 		if (is_session_locked) then
-			task.wait(datastore_settings.SAVE_FREQUENCY)
-		else
-			task.wait();
+			local yield_interval : number = 60 / datastore_settings.REQUEST_PER_MINUTE.Set; -- calculate minimal yield interval for setting
+			task.wait(yield_interval); 
 		end
 	end
 		
 	-- is the player still in game?
-	if players:GetPlayerByUserId(userID) then
+	if players:GetPlayerByUserId(userid) then
 		-- we are retrieving the last_data_key for the user
-		local success, result = requestGetDatastoreRequest(userID, ordered_datastore, "GetSortedAsync")
-		if players:GetPlayerByUserId(userID) then
-			local last_data_key = result:GetCurrentPage()[1] and result:GetCurrentPage()[1].value;
+		success, result = requestDatastoreRequest(userid, "GetSorted", Enum.DataStoreRequestType.GetSortedAsync, function()
+			return ordered_datastore:GetSortedAsync(false, 1)
+		end)
+
+		if players:GetPlayerByUserId(userid) then
+			local last_data_key : number? = result:GetCurrentPage()[1] and result:GetCurrentPage()[1].value;
 			if not last_data_key then
 				-- this means that, the player is a new player to this experience/game.
-				player_data_cache[userID] = deepCopy(STARTER_DATA);
+				player_data_cache[userid] = deepCopy(STARTER_DATA);
 			else
 				-- this means that the player HAS played the game before.
-				local success, result = requestGetDatastoreRequest(userID, datastore, "GetAsync", last_data_key)
-				if players:GetPlayerByUserId(userID) then
+				success, result = requestDatastoreRequest(userid, "Get", Enum.DataStoreRequestType.GetAsync, function()
+					return datastore:GetAsync(last_data_key);
+				end)
+				if players:GetPlayerByUserId(userid) then
 					if result ~= "data_reset" and result then
-						player_data_cache[userID] = result;
+						player_data_cache[userid] = result;
 					elseif result == "data_reset" then
 						-- this means that, the player had their data deleted and should use new data.
-						player_data_cache[userID] = deepCopy(STARTER_DATA);
+						player_data_cache[userid] = deepCopy(STARTER_DATA);
 					end
 				else
-					requestRemoveDatastoreRequest(userID, session_lock_datastore, userID)
+					requestDatastoreRequest(userid, "Set",Enum.DataStoreRequestType.SetIncrementAsync, function() 
+						return session_lock_datastore:RemoveAsync(userid);
+					end)
 				end
 			end
-			player_state_cache[userID].data_loaded = true;
+			player_state_cache[userid].data_loaded = true;
 			
-			output(print, string.format("[%s]: %d's data has been loaded.", script.Name, userID))
+			output(print, string.format("[%s]: %d's data has been loaded.", script.Name, userid))
 		else
-			requestRemoveDatastoreRequest(userID, session_lock_datastore, userID)
+			requestDatastoreRequest(userid, "Set",Enum.DataStoreRequestType.SetIncrementAsync, function() 
+				return session_lock_datastore:RemoveAsync(userid);
+			end)
 		end
 	else
-		requestRemoveDatastoreRequest(userID, session_lock_datastore, userID)
+		requestDatastoreRequest(userid, "Set",Enum.DataStoreRequestType.SetIncrementAsync, function() 
+			return session_lock_datastore:RemoveAsync(userid);
+		end)
 	end
 	
 	player.AncestryChanged:Connect(function(_, parent)
 		if parent == nil then
-			player_datastore.save(userID, true);
+			player_datastore.save(userid, true);
 		end
 	end)
 end
 
+--[[
+	playerRemoving
+	
+	@param player the player object
+	@return the nil type
+]]
 local function playerRemoving(player : Player)
-	local userID = player.UserId;
-	player_datastore.save(userID, true)
+	local userid : number = player.UserId;
+	player_datastore.save(userid, true)
 end
 
 players.PlayerRemoving:Connect(playerRemoving)
@@ -370,14 +414,14 @@ game:BindToClose(function()
 	-- log the total data loaded players as well as the initiate saving from bind to close.
 	local total_data_loaded = 0;
 	local saved_data = 0;
-	for userID, state_data in pairs(player_state_cache) do 
+	for userid : number, state_data : {} in pairs(player_state_cache) do 
 		if state_data.data_loaded then
 			total_data_loaded += 1;
 			task.spawn(function()
 				state_data.player_bindable.Event:Wait();
 				saved_data += 1;
 			end)
-			task.spawn(player_datastore.save, userID, true);
+			task.spawn(player_datastore.save, userid, true);
 		end
 	end
 	
@@ -392,9 +436,9 @@ task.spawn(function()
 	-- we only auto-save if the server is not shutting down.
 	while not server_shutting_down do 
 		for _, player in ipairs(players:GetPlayers()) do
-			local userID = player.UserId;
-			if player_state_cache[userID] and (os.time() - player_state_cache[userID].last_save >= datastore_settings.SAVE_FREQUENCY) then
-				task.spawn(player_datastore.save, userID, false);			
+			local userid : number = player.UserId;
+			if player_state_cache[userid] and (os.time() - player_state_cache[userid].last_save >= datastore_settings.SAVE_FREQUENCY) then
+				task.spawn(player_datastore.save, userid, false);			
 			end
 		end
 		task.wait();
