@@ -6,6 +6,7 @@ Used to save player data. Currently used in my personal projects.
 2. Place `datastore_settings.lua` and `reset_data.lua` under `player_datastore.lua`
 3. Add a folder called `player_bindables` under `player_datastore.lua`
 4. Setup is now down.
+5. Additionally, you can grab the module here: https://create.roblox.com/marketplace/asset/12263805708
 
 # How to use
 1. Create your own starter data module
