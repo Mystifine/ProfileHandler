@@ -4,11 +4,13 @@ local datastoreservice : DataStoreService = game:GetService("DataStoreService");
 
 local session_lock_datastore : DataStore = datastoreservice:GetDataStore("session_lock_data")
 
-local player_datastore : {} = {}
+local player_datastore = {}
 
 local datastore_settings = require(script.datastore_settings);
 
 local player_data_cache : {} = {};
+local player_data_change_connection_count : number = 1;
+local player_data_change_connections : {} = {};
 local player_state_cache : {} = {};
 
 local starter_data_set : boolean = false;
@@ -229,6 +231,7 @@ function player_datastore.save(userid : number, session_end : boolean)
 					-- first, we will clear the player server data to prevent any form of manipulation with it
 					player_data_cache[userid] = nil;
 					player_state_cache[userid] = nil;
+					player_data_change_connections[userid] = nil;
 
 					-- next we will request to remove the session lock 
 					local success_session_lock_remove : boolean = requestDatastoreRequest(userid, "Remove", Enum.DataStoreRequestType.SetIncrementAsync, function()
@@ -259,6 +262,214 @@ end
 function player_datastore.setStarterData(starter_data : any)
 	STARTER_DATA = deepCopy(starter_data)
 	starter_data_set = true;
+end
+
+-- DisconnectClass
+local DisconnectClass = {}
+DisconnectClass.__index = DisconnectClass;
+
+function DisconnectClass:Disconnect()
+	self.object:Disconnect();
+end
+
+function DisconnectClass.new(object)
+	local disconnect_object = {
+		object = object;
+	}
+	
+	return setmetatable(disconnect_object, DisconnectClass);
+end
+
+-- DataChangedSignal
+local DataChangedSignal = {};
+DataChangedSignal.__index = DataChangedSignal;
+
+function DataChangedSignal:Disconnect()
+	if not player_data_change_connections[self.userid] then return end;
+	if not player_data_change_connections[self.userid][self.uuid] then return end;
+	
+	-- removes reference
+	player_data_change_connections[self.userid][self.uuid] = nil;
+end
+
+function DataChangedSignal:Connect(onChange : (old_value : any?, new_value : any?) -> nil)
+	self.onChange = onChange;
+	
+	return DisconnectClass.new(self);
+end
+
+function DataChangedSignal.new(player : Player, directory_path : {})
+	local data_changed_signal = {
+		userid = player.UserId,
+		signal_path = deepCopy(directory_path),
+		onChange = nil,
+		uuid = player_data_change_connection_count;
+	};
+	
+	player_data_change_connection_count += 1;
+	
+	return setmetatable(data_changed_signal, DataChangedSignal);
+end
+
+--[[
+	player_datastore.dataChanged
+	
+	creates a DataChangedSignal object and returns it, can be then used to connect and disconnect the event;
+	
+	@param player the player object
+	@param directory_path the path for data change
+	@return DataChangedSignal object
+]]
+function player_datastore.dataChanged(player : Player, directory_path : {})
+	local data_changed_signal = DataChangedSignal.new(player, directory_path);
+	
+	if not player_data_change_connections[data_changed_signal.userid] then
+		player_data_change_connections[data_changed_signal.userid] = {}
+	end
+	
+	player_data_change_connections[data_changed_signal.userid][data_changed_signal.uuid] = data_changed_signal;
+	
+	return data_changed_signal
+end
+
+--[[
+	player_datastore.fireDataChangedSignal
+	
+	@param player the player object
+	@param directory_path the path directory 
+	@param old_data the old player data
+	@param new_data the new / changed player_data
+]]
+function player_datastore.fireDataChangedSignal(player : Player, directory_path : {}, old_data : any?, new_data : any?)
+	local userid : number = player.UserId;
+	
+	if player_data_change_connections[userid] then
+		
+		-- we will progressively update the directory path;
+		local current_path = {};
+		
+		local current_old_directory = old_data;
+		local current_new_directory = new_data;
+		
+		for i = 1, #directory_path do 
+			table.insert(current_path, directory_path[i]);
+			
+			-- update the old/new
+			current_old_directory = current_old_directory and current_old_directory[directory_path[i]];
+			current_new_directory = current_new_directory and current_new_directory[directory_path[i]];
+			
+			-- we want to invoke onChange for all parent directories as well;
+			for _, data_changed_signal in pairs(player_data_change_connections[userid]) do 
+				local signal_path = data_changed_signal.signal_path;
+
+				local is_same = true;
+				-- we want to compare the current_path to signal_path
+				if #signal_path ~= #current_path then
+					is_same = false;
+				else
+					for j = 1, #signal_path do 
+						local index = signal_path[j];
+						if index ~= current_path[j] then
+							is_same = false;
+							break;
+						end
+					end 
+				end
+				-- invoke on change
+				if is_same then 
+					task.spawn(data_changed_signal.onChange, current_old_directory, current_new_directory);
+				end
+			end
+		end
+	end
+end
+
+--[[
+	player_datastore.setData
+	
+	@param player the player data you want to edit
+	@param directory path a list of data you want to edit
+	@param new_value the new value
+	@return the new value setted;
+]]
+function player_datastore.setData(player : Player, directory_path : {}, new_value : any?) : any?
+	local player_data = player_datastore.get(player);
+
+	local current_directory = player_data;
+
+	for i = 1, #directory_path do 
+		local index : any = directory_path[i];
+		
+		-- if the current directory is nil then incorrect path was provided
+		if current_directory == nil then
+			error(string.format("attempt to index nil with '%s'", index))
+		end
+
+		local retrieved_value : any? = current_directory[index];
+
+		-- if we are on the last index, we will accept nil value to fill;
+		if i == #directory_path then
+			-- we are on the last index;
+
+			-- set the value to the default value
+			local old_player_data = deepCopy(player_data);
+			current_directory[index] = new_value;
+			local new_player_data = deepCopy(player_data);
+			
+			player_datastore.fireDataChangedSignal(player, directory_path, old_player_data, new_player_data);
+			
+			return new_value;
+		else
+			current_directory = current_directory[index];
+		end 
+	end
+end
+
+--[[
+	player_datastore.getData
+	
+	purpose of this function is to retrieve data with intent of defaulting the value if it doesn't exist.
+	
+	@param player player object of the data you want to get
+	@param directory_path a lust of string the string prefix for indexing the data 
+	@param default_value any value, will be filled if can not find the last part of directory_prefix. 
+	@return the new data
+]]
+function player_datastore.getData(player : Player, directory_path : {}, default_value : any?) : any?
+	local player_data = player_datastore.get(player);
+	
+	local current_directory = player_data;
+	local return_value : any? = nil;
+	
+	for i = 1, #directory_path do 
+		local index : any = directory_path[i];
+		
+		-- if the current directory is nil then incorrect path was provided
+		if current_directory == nil then
+			error(string.format("attempt to index nil with '%s'", index))
+		end
+		
+		local retrieved_value : any? = current_directory[index];
+		
+		-- if we are on the last index, we will accept nil value to fill;
+		if i == #directory_path then
+			-- we are on the last index;
+			
+			-- if the retrieved value is nil
+			if retrieved_value == nil then
+				
+				-- set the value to the default value
+				return_value = player_datastore.setData(player, directory_path, default_value);
+			else
+				-- the return value would be the retrieved value;
+				return_value = retrieved_value;
+			end 
+		else
+			current_directory = current_directory[index];
+		end 
+	end
+	
+	return return_value
 end
 
 --[[
