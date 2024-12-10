@@ -1,14 +1,28 @@
-# Player Datastore Module
-Used to save player data. Currently used in my personal projects.
+# ProfileHandler
 
-# Installation
-1. Create a module for each `.lua` file.
-2. Place `datastore_settings.lua` and `reset_data.lua` under `player_datastore.lua`
-3. Add a folder called `player_bindables` under `player_datastore.lua`
-4. Setup is now down.
-5. Additionally, you can grab the module here: https://create.roblox.com/marketplace/asset/12263805708
+This is a Roblox project for managing player profiles with data persistence and session locks. The project is modular and includes utilities for debugging, data management, and configuration.
 
-# How to use
-1. Create your own starter data module
-2. Set up your own starter data and initialize using `setStarterData` from `player_datastore.lua`
-3. You're done. use `get` passing the player object to retrieve data. Data is automatically saved.
+## Directory Structure
+
+- `bindables/`: Contains BindableEvent modules for inter-script communication.
+- `util/`: Includes utility modules for debugging, resetting data, and deep copying tables.
+- `src/ProfileClass.lua`: Core class for managing player profiles.
+- `src/ProfileHandlerSettings.lua`: Configuration for the profile handler.
+- `src/ProfileHandler.lua`: Core module that relies on ProfileClass.lua.
+
+## How to Use
+
+1. Place the `ProfileHandler.lua` module in `ServerStorage` in your Roblox game.
+2. Place `ProfileClass.lua` and `ProfileHandlerSettings.lua` and `util` folder and `bindables` folder in `ProfileHandler.lua`.
+2. Ensure all dependencies are correctly set up (e.g., DataStoreService permissions).
+3. Use `ProfileHandler.newProfile` to create and manage profiles.
+
+## Utilities
+
+- **DebugModule**: Logging and warning utilities.
+- **DeepCopy**: Provides a deep copy function for tables.
+- **ResetData**: Contains logic for resetting player data to default.
+
+## License
+
+[MIT License](LICENSE)
