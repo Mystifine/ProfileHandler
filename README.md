@@ -138,6 +138,7 @@ Handles individual profile instances. It provides methods to manipulate and save
 7. Use `ProfileHandler.newProfile` to create and manage profiles. 
 
 What it should look like:
+
 ![image](https://github.com/user-attachments/assets/14fa1fe0-6a20-4a39-8e28-e3e5bb48f005)
 
 ## Directory Structure
@@ -151,7 +152,7 @@ What it should look like:
 ---
 
 ## Examples
-It is recommended to cache profiles into tables. The ProfileHandler does internally cache and clean this data which you can use `ProfileHandler.getProfile()` to retrieve. 
+It is recommended to cache profiles into tables. The ProfileHandler does internally cache and clean this data which you can use `ProfileHandler.getProfile()` to retrieve. Please do your best to use `:SetData()` and `:GetData()` to update and retrieve data.
 ### Data Handler
 Commonly developers enjoy using instances as a way to change data as it is the convenient common method taught to many newer scripters. Below is a setup that will allow developers to instantiate one layer of data and have it be updated to the profile.
 ```lua
