@@ -16,7 +16,11 @@
     - [ProfileHandler Module](#profilehandler-module)
     - [ProfileClass Module](#profileclass-module)
 5. [Setup](#setup)
+    - [Installation](#installation)
+    - [Directory Setup](#directory-setup)
 6. [Examples](#examples)
+    - [Data Handler](#data-handler)
+    - [Data Template](#data-template)
 7. [License](#license)
 
 ---
@@ -125,6 +129,7 @@ Handles individual profile instances. It provides methods to manipulate and save
 
 ![image](https://github.com/user-attachments/assets/cc0cd3da-4d4d-46ec-a24e-e9e373ec59cc)
 
+### Directory Setup
 2. Once you have installed the files, Place the `ProfileHandler.lua` module in `ServerStorage` in your Roblox game.
 3. Place `ProfileClass.lua` and `ProfileHandlerSettings.lua` and `util` folder and `bindables` folder in `ProfileHandler.lua`.
 4. Ensure all dependencies are correctly set up (e.g., DataStoreService permissions).
@@ -144,20 +149,122 @@ Handles individual profile instances. It provides methods to manipulate and save
 
 ## Examples
 
-### Creating a New Profile
+### Data Handler
+Commonly developers enjoy using instances as a way to change data as it is the convenient common method taught to many newer scripters. Below is a setup that will allow developers to instantiate one layer of data and have it be updated to the profile.
 ```lua
-local ProfileHandler = require(game.ServerScriptService.ProfileHandler)
+local players = game.Players;
+local serverstorage = game.ServerStorage;
 
-local datastore_id = "PlayerDataStore"
-local profile_id = "Player123"
-local data_template = {level = 1, experience = 0}
+local ProfileHandler = require(serverstorage.ProfileHandler);
 
-local profile = ProfileHandler.newProfile(datastore_id, profile_id, true, data_template)
-if profile then
-    print("Profile created successfully!")
+local player_data_template = require(serverstorage.player_data_template);
+
+local getProfileData = game.ReplicatedStorage.getProfileData;
+
+local player_data_handler = {}
+
+local player_profiles = {};
+
+local function playerAdded(player : Player)
+	local profile = ProfileHandler.newProfile("player_data", player.UserId, true, player_data_template);
+	profile:Reconcile(player_data_template);
+		
+	player_profiles[player] = profile;
+	
+	-- additional setup
+
+	local DATA_TYPE_TO_INSTANCE = {
+		string = "StringValue",
+		number = "NumberValue",
+		boolean = "BoolValue"
+	}
+
+	local profile_data = profile:GetData();
+	for data_name, data_value in pairs(profile_data) do 
+		local data_type = typeof(data_value);
+		if DATA_TYPE_TO_INSTANCE[data_type] then
+			local obj = Instance.new(DATA_TYPE_TO_INSTANCE[data_type]);
+			obj.Name = data_name;
+			obj.Value = data_value;
+			obj.Parent = player;
+			
+			obj:GetPropertyChangedSignal("Value"):Connect(function()
+				profile:SetData(data_name, obj.Value)				
+			end)
+		end
+	end
+	
+	-- conditions stuff
+	if not profile_data.conditions.GAVE_STARTER_ITEMS then
+		-- give the items;
+		profile_data.conditions.GAVE_STARTER_ITEMS = true;
+	end
+	
+	local DATA_LOADED = Instance.new("BoolValue");
+	DATA_LOADED.Value = true;
+	DATA_LOADED.Name = "DATA_LOADED";
+	DATA_LOADED.Parent = player;
 end
+
+
+local function playerRemoving(player : Player)
+	local profile = player_profiles[player];
+	if profile then
+		profile:Save(true);
+		profile:Destroy();
+	end
+	player_profiles[player] = nil;
+end
+
+function player_data_handler._establishConnections()
+	players.PlayerAdded:Connect(playerAdded)
+	players.PlayerRemoving:Connect(playerRemoving)
+	
+	getProfileData.OnServerInvoke = function(player : Player, ...)
+		local arguments = {...};
+		local DATA_LOADED = player:WaitForChild("DATA_LOADED");
+		local profile = player_profiles[player];
+		
+		if profile then
+			local data = profile.data;
+			for i = 1, #arguments do 
+				local argument = arguments[i];
+				
+				data = data[argument];
+				
+				if data == nil then
+					return data;
+				end
+			end
+			return data;
+		end
+	end
+end
+
+
+function player_data_handler.main()
+	player_data_handler._establishConnections();
+end
+
+return player_data_handler
+
 ```
 
+### Data Template
+It is also crucial to setup a data template. This is a good example of something someone may do
+```lua
+local player_data_template = {}
+
+player_data_template.level = 1;
+player_data_template.exp = 0;
+player_data_template.max_exp = 1000;
+
+player_data_template.inventory = {};
+
+player_data_template.conditions = {};
+
+return player_data_template
+```
 ## License
 
 [MIT License](LICENSE)
