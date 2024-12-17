@@ -2,10 +2,13 @@
 	Module Name: ProfileHandlerProfileHandlerSettings
 	Description: Stores ProfileHandlerSettings used by the ProfileHandler and ProfileClass
 	Written by: Mystifine
-	Last Updated: 09/12/2024
+	Last Updated: 17/12/2024
 ]]
 
 local ProfileHandlerSettings = {}
+
+-- DO NOT CHANGE VERSION
+ProfileHandlerSettings.VERSION = "v0.0.0"
 
 ProfileHandlerSettings.DEBUG_MODE = true;
 ProfileHandlerSettings.TRACE_BACK_MESSAGE = false;
