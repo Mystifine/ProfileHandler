@@ -4,7 +4,7 @@
 `ProfileHandler` is a robust module for managing user profiles in Roblox. It leverages Roblox's DataStore service to handle data storage, autosaving, session locking, and data reconciliation. The system is designed to ensure data integrity and efficiency, even during server shutdowns.
 
 - **Author**: Mystifine  
-- **Last Updated**: 13/12/2024
+- **Last Updated**: 17/12/2024
 
 ---
 
@@ -74,12 +74,19 @@ Handles individual profile instances. It provides methods to manipulate and save
      - `profile_id (string)`: The unique profile identifier.
    - **Returns**: A `Profile` instance or `nil`.
 
-3. **`ProfileHandler.editProfile(datastore_id, profile_id, transformationFunction)`**
+3. **`ProfileHandler.updateProfileAsync(datastore_id, profile_id, transformationFunction)`**
    - **Description**: Edits the profile data using a transformation function.
    - **Parameters**:
      - `datastore_id (string)`
      - `profile_id (string)`
      - `transformationFunction (function)`: A function that modifies the profile data.
+   - **Returns**: `(boolean, any?)`.
+  
+4. **`ProfileHandler.getProfileAsync(datastore_id, profile_id)`**
+   - **Description**: Retrieves profile data through UpdateAsync
+   - **Parameters**:
+     - `datastore_id (string)`
+     - `profile_id (string)`
    - **Returns**: `(boolean, any?)`.
 
 ---
@@ -117,7 +124,7 @@ Handles individual profile instances. It provides methods to manipulate and save
 5. **`Profile:SetData(path, value)`**
    - **Description**: Sets data in the profile at the specified path.
    - **Parameters**:
-     - `path (string)`: Path to the data field.
+     - `path (string?)`: Path to the data field.
      - `value (any)`: The value to set.
 
 ---
