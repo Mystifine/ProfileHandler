@@ -2,15 +2,18 @@
 	Module Name: ProfileHandler
 	Description: Module is used to handle data in Roblox.
 	Written by: Mystifine
-	Last Updated: 09/12/2024
+	Last Updated: 16/12/2024
 ]]
 
 export type ProfileHandler = {
 	newProfile : (datastore_id : string, profile_id : string, respect_session_lock : boolean, data_template : any?) -> Profile;
-	readProfile : (datastore_id : string, profile_id : string) -> (boolean, any?);
-	editProfile : (datastore_id : string, profile_id : string, transformationFunction : (old_data : any?) -> any?) -> (boolean, any?);
+	getProfileAsync : (datastore_id : string, profile_id : string) -> (boolean, any?);
+	updateProfileAsync : (datastore_id : string, profile_id : string, transformationFunction : (old_data : any?) -> any?) -> (boolean, any?);
 	getProfile : (datastore_id : string, profile_id : string) -> Profile?;	
 };
+
+-- SERVICES
+local DataStoreService = game:GetService("DataStoreService");
 
 -- MODULES
 local ProfileHandlerSettings = require(script.ProfileHandlerSettings);
@@ -25,6 +28,26 @@ local bindable_storage = script.Bindables;
 local SERVER_CLOSING = false;
 
 local ProfileHandler = {}
+
+function ProfileHandler.getProfileAsync(datastore_id : string, profile_id : string) : (boolean, any?)
+	local datastore : DataStore = DataStoreService:GetDataStore(datastore_id);
+
+	local read_success, read_result = pcall(function()
+		return datastore:GetAsync(profile_id);
+	end)
+
+	return read_success, read_result;
+end
+
+function ProfileHandler.updateProfileAsync(datastore_id : string, profile_id : string, transformationFunction : (old_data : any?) -> any?) : (boolean, any?)
+	local datastore : DataStore = DataStoreService:GetDataStore(datastore_id);
+
+	local edit_success, edit_result = pcall(function()
+		return datastore:UpdateAsync(profile_id, transformationFunction);
+	end)
+
+	return edit_success, edit_result;
+end
 
 function ProfileHandler.getProfile(datastore_id : string, profile_id : string)
 	return ProfileClass.getProfile(datastore_id, profile_id)
