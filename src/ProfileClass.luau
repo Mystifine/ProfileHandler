@@ -3,7 +3,6 @@
 	Description: Module is used to manage profile classes
 	Written by: Mystifine
 	Last Updated: 17/12/2024
-
 ]]
 
 export type Profile = {
@@ -14,9 +13,9 @@ export type Profile = {
 
 	_respect_session_lock : boolean,
 	_is_session_end_saving : boolean,
-	_is_destroyed : boolean,
 	_is_saving : boolean,
 	_last_save : number,
+	_is_destroyed : boolean,
 	_data_template : {}?,
 	_events : {},
 
@@ -27,9 +26,9 @@ export type Profile = {
 	Destroy : (self : Profile) -> nil;
 	Delete : (self : Profile) -> boolean;
 	Load : (self : Profile) -> nil;
-	Reconcile : (self : Profile, data : any?) -> boolean;
+	Reconcile : (self : Profile, data : {}?) -> boolean;
 	GetData : (self : Profile, path : string?) -> any?;
-	SetData : (self : Profile, path : string?, data : any) -> nil;
+	SetData : (self : Profile, path : string, data : any?) -> any?;
 	IsDestroyed : (self : Profile) -> boolean,
 	IsDataLoaded : (self : Profile) -> boolean,
 }
@@ -175,7 +174,7 @@ function ProfileClass:Destroy()
 	DebugModule.print(string.format(format_string, datastore_id, profile_id), ProfileHandlerSettings.TRACE_BACK_MESSAGE)
 end
 
-function ProfileClass:Reconcile(data : any?)
+function ProfileClass:Reconcile(data : {}?)
 	-- Reconcile will fill missing data fields compared with default data. Not recursive.
 	local profile : Profile = self;
 	
@@ -185,21 +184,16 @@ function ProfileClass:Reconcile(data : any?)
 	-- If profile data has not been loaded then this is illegal.
 	if not profile._data_loaded then profileNotLoadedWarning(profile) return end;
 	
-	if data == nil then
+	if not data then
 		local format_string = "\nDatastore: %s\nProfile: %s\nContent: reconcile data is nil.";
 		DebugModule.warn(string.format(format_string, profile._datastore_id, profile._profile_id), ProfileHandlerSettings.TRACE_BACK_MESSAGE);
 		return;	
 	end
 
-	if typeof(data) == "table" then
-		for index, value in pairs(data) do 
-			if (profile._data[index] == nil) then
-				profile._data[index] = DeepCopy(value);
-			end
+	for index, value in pairs(data) do 
+		if (profile._data[index] == nil) then
+			profile._data[index] = DeepCopy(value);
 		end
-	else
-		-- If you are trying to reconcile a boolean or number then it will assume you want it as a number.
-		profile._data = data;
 	end
 end
 
@@ -257,7 +251,7 @@ function ProfileClass:GetData(path : string?) : any?
 	return data;
 end
 
-function ProfileClass:SetData(path : string?, value : any) : nil
+function ProfileClass:SetData(path : string, value : any) : any?
 	
 	local profile : Profile = self;
 
@@ -267,34 +261,30 @@ function ProfileClass:SetData(path : string?, value : any) : nil
 	-- If profile data has not been loaded then this is illegal.
 	if not profile._data_loaded then profileNotLoadedWarning(profile) return end;
 
-	-- if path is nil then we will set the entire data property to the value.
-	if path == nil then
-		profile._data = value;
-	else
-		local data = profile._data;
+	local data = profile._data;
 
-		local splitted_string = string.split(path, ".");
+	local splitted_string = string.split(path, ".");
 
-		local index = 1;
-		-- The reason we do -1 is because we want the parent to set the value
-		while (index < #splitted_string - 1) do 
-			local str = splitted_string[index];
+	local index = 1;
+	-- The reason we do -1 is because we want the parent to set the value
+	while (index < #splitted_string - 1) do 
+		local str = splitted_string[index];
 
-			if not data[str] then
-				local format_string = "\nDatastore: %s\nProfile: %s\nContent: Failed to retrieve data. '%s' is not a valid property.";
-				DebugModule.print(string.format(
-					format_string, 
-					profile._datastore_id, profile._profile_id, str
-					), ProfileHandlerSettings.TRACE_BACK_MESSAGE);
-				return;
-			end
-
-			index += 1;
+		if not data[str] then
+			local format_string = "\nDatastore: %s\nProfile: %s\nContent: Failed to retrieve data. '%s' is not a valid property.";
+			DebugModule.print(string.format(
+				format_string, 
+				profile._datastore_id, profile._profile_id, str
+				), ProfileHandlerSettings.TRACE_BACK_MESSAGE);
+			return;
 		end
 
-		-- We should now be at the last element
-		data[splitted_string[#splitted_string]] = value;
+		index += 1;
 	end
+
+	-- We should now be at the last element
+	data[splitted_string[#splitted_string]] = value;
+	return data[splitted_string[#splitted_string]];
 end
 
 function ProfileClass:IsDestroyed() : boolean
@@ -331,18 +321,29 @@ function ProfileClass:Load() : nil
 
 				local return_result = nil;
 
+				-- Create meta data if it doesn't exist.
+				if not old_data.meta_data then
+					old_data.meta_data = {
+						save_version = ProfileHandlerSettings.VERSION;
+						last_save_time = os.time();
+						session_locked = false;
+					}
+				end
+
 				-- Everything else depends on session lock respect
 				if profile._respect_session_lock then
 					
 					-- If the data has no session lock or the session lock timer ran out we are allowed to retrieve the data
-					if (not old_data.session_lock) or (os.time() - old_data.session_lock >= ProfileHandlerSettings.SESSION_LOCK_AUTO_RELEASE) then
-						old_data.session_lock = os.time();
+					if (not old_data.meta_data.session_locked) or (os.time() - old_data.meta_data.last_save_time >= ProfileHandlerSettings.SESSION_LOCK_AUTO_RELEASE) then
+						old_data.meta_data.last_save_time = os.time();
+						old_data.meta_data.session_locked = true;
+						
 						session_locked = false;
 						return_result = old_data;
 					else
 						-- Otherwise session is locked;
 						session_locked = true;
-						session_lock_cooldown = ProfileHandlerSettings.SESSION_LOCK_AUTO_RELEASE - (os.time() - old_data.session_lock);
+						session_lock_cooldown = ProfileHandlerSettings.SESSION_LOCK_AUTO_RELEASE - (os.time() - old_data.meta_data.last_save_time);
 						return_result = nil; 
 					end
 				
@@ -376,7 +377,7 @@ function ProfileClass:Load() : nil
 			"\nDatastore: %s\nProfile: %s\nContent: Profile has been destroyed, loading data has been cancelled.",
 			profile._datastore_id,
 			profile._profile_id
-		),ProfileHandlerSettings.TRACE_BACK_MESSAGE);
+		), ProfileHandlerSettings.TRACE_BACK_MESSAGE);
 	else
 		profile._data = update_result;
 		profile._data_loaded = true;
@@ -386,38 +387,16 @@ function ProfileClass:Load() : nil
 			format_string,
 			profile._datastore_id,
 			profile._profile_id
-			), ProfileHandlerSettings.TRACE_BACK_MESSAGE)		
+		), ProfileHandlerSettings.TRACE_BACK_MESSAGE)		
 	end
 end
 
-function ProfileClass:GetAsync()
-	local profile : Profile = self;
-	local datastore : DataStore = DataStoreService:GetDataStore(profile._datastore_id);
-	
-	local read_success, read_result = pcall(function()
-		return datastore:GetAsync(profile._profile_id);
-	end)
-
-	return read_success, read_result;
-end
-
-function ProfileClass:UpdateAsync(transformationFunction)
-	local profile : Profile = self;
-	local datastore : DataStore = DataStoreService:GetDataStore(profile._datastore_id);
-
-	local edit_success, edit_result = pcall(function()
-		return datastore:UpdateAsync(profile._profile_id, transformationFunction);
-	end)
-
-	return edit_success, edit_result;
-end
-
-function ProfileClass.newProfile(datastore_id : string, profile_id : string, respect_session_lock : boolean?, data_template : {}?) : Profile
+function ProfileClass.newProfile(datastore_id : string, profile_id : string, respect_session_lock : boolean?, data : {}?) : Profile
 	-- Initialize all attributes/properties.
 	local profile : Profile = setmetatable({}, ProfileClass);
 	profile._profile_id = profile_id;
 	profile._datastore_id = datastore_id;
-	profile._data = DeepCopy(data_template) or {};
+	profile._data = DeepCopy(data) or {};
 	profile._data_loaded = false;
 	
 	profile._events = {};
@@ -425,7 +404,7 @@ function ProfileClass.newProfile(datastore_id : string, profile_id : string, res
 	profile._respect_session_lock = respect_session_lock;
 	profile._is_saving = false;
 	profile._is_session_end_saving = false;
-	profile._data_template = data_template;
+	profile._data_template = data;
 	profile._last_save = os.time();
 	
 	-- Create save bindable for signaling saves
