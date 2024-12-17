@@ -67,6 +67,14 @@ local function profileDestroyedWarning(profile : Profile)
 	end
 end
 
+local function getProfileMetaData()
+	return {
+		save_version = ProfileHandlerSettings.VERSION;
+		last_save_time = os.time();
+		session_locked = false;
+	}
+end
+
 function ProfileClass:Save(session_ending : boolean)
 	local profile : Profile = self;
 	local datastore : DataStore = DataStoreService:GetDataStore(profile._datastore_id);
@@ -98,11 +106,16 @@ function ProfileClass:Save(session_ending : boolean)
 		update_success, update_result = pcall(function()
 			return datastore:UpdateAsync(profile._profile_id, function(old_data : any?)
 
-				if (profile._is_session_end_saving) then
-					profile._data.session_lock = nil;
-				else
-					profile._data.session_lock = os.time();
+				if not profile._data.meta_data then
+					profile._data.meta_data = getProfileMetaData();
 				end
+
+				-- Remove session lock
+				if (profile._is_session_end_saving) then
+					profile._data.meta_data.session_locked = false;
+				end
+				
+				profile._data.meta_data.last_save_time = os.time();
 
 				return profile._data;
 			end)
@@ -323,11 +336,7 @@ function ProfileClass:Load() : nil
 
 				-- Create meta data if it doesn't exist.
 				if not old_data.meta_data then
-					old_data.meta_data = {
-						save_version = ProfileHandlerSettings.VERSION;
-						last_save_time = os.time();
-						session_locked = false;
-					}
+					old_data.meta_data = getProfileMetaData()
 				end
 
 				-- Everything else depends on session lock respect
