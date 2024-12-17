@@ -6,7 +6,7 @@
 ]]
 
 export type ProfileHandler = {
-	newProfile : (datastore_id : string, profile_id : string, respect_session_lock : boolean, data_template : any?) -> Profile;
+	newProfile : (datastore_id : string, profile_id : string, respect_session_lock : boolean, data : {}?) -> Profile;
 	getProfileAsync : (datastore_id : string, profile_id : string) -> (boolean, any?);
 	updateProfileAsync : (datastore_id : string, profile_id : string, transformationFunction : (old_data : any?) -> any?) -> (boolean, any?);
 	getProfile : (datastore_id : string, profile_id : string) -> Profile?;	
@@ -53,11 +53,11 @@ function ProfileHandler.getProfile(datastore_id : string, profile_id : string)
 	return ProfileClass.getProfile(datastore_id, profile_id)
 end
 
-function ProfileHandler.newProfile(datastore_id : string, profile_id : string, respect_session_lock : boolean, data_template : {}?) : ProfileClass.Profile?
+function ProfileHandler.newProfile(datastore_id : string, profile_id : string, respect_session_lock : boolean, data : {}?) : ProfileClass.Profile?
 	-- If the server is closing, ignore new profile request.
 	if SERVER_CLOSING then return end; 
 	
-	local profile : ProfileClass.Profile = ProfileClass.newProfile(datastore_id, profile_id, respect_session_lock, data_template);
+	local profile : ProfileClass.Profile = ProfileClass.newProfile(datastore_id, profile_id, respect_session_lock, data);
 	profile:Load();
 	
 	return profile;
