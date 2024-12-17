@@ -2,7 +2,7 @@
 	Module Name: ProfileHandler
 	Description: Module is used to handle data in Roblox.
 	Written by: Mystifine
-	Last Updated: 16/12/2024
+	Last Updated: 17/12/2024
 ]]
 
 export type ProfileHandler = {
