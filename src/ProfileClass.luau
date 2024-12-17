@@ -2,7 +2,7 @@
 	Module Name: ProfileClass
 	Description: Module is used to manage profile classes
 	Written by: Mystifine
-	Last Updated: 09/12/2024
+	Last Updated: 17/12/2024
 
 ]]
 
@@ -10,7 +10,7 @@ export type Profile = {
 	_profile_id : string,
 	_datastore_id : string,
 	_data_loaded : boolean,
-	_data : {}?,
+	_data : any?,
 
 	_respect_session_lock : boolean,
 	_is_session_end_saving : boolean,
@@ -26,10 +26,10 @@ export type Profile = {
 	Save : (self : Profile, session_ending : boolean) -> nil;
 	Destroy : (self : Profile) -> nil;
 	Delete : (self : Profile) -> boolean;
-	Load : (self :Profile) -> nil;
-	Reconcile : (self : Profile, data_template : any?) -> boolean;
+	Load : (self : Profile) -> nil;
+	Reconcile : (self : Profile, data : any?) -> boolean;
 	GetData : (self : Profile, path : string?) -> any?;
-	SetData : (self : Profile, path : string, data : any) -> nil;
+	SetData : (self : Profile, path : string?, data : any) -> nil;
 	IsDestroyed : (self : Profile) -> boolean,
 	IsDataLoaded : (self : Profile) -> boolean,
 }
@@ -54,7 +54,7 @@ local function profileNotLoadedWarning(profile : Profile)
 			"\nDatastore: %s\nProfile: %s\nContent: Profile data has not been loaded. Please call :Load() on profile.",
 			profile._datastore_id,
 			profile._profile_id
-			), ProfileHandlerSettings.TRACE_BACK_MESSAGE);
+		), ProfileHandlerSettings.TRACE_BACK_MESSAGE);
 	end
 end
 
@@ -64,7 +64,7 @@ local function profileDestroyedWarning(profile : Profile)
 			"\nDatastore: %s\nProfile: %s\nContent: Profile has been destroyed. Lingering reference.",
 			profile._datastore_id,
 			profile._profile_id
-			), ProfileHandlerSettings.TRACE_BACK_MESSAGE);
+		), ProfileHandlerSettings.TRACE_BACK_MESSAGE);
 	end
 end
 
@@ -175,7 +175,7 @@ function ProfileClass:Destroy()
 	DebugModule.print(string.format(format_string, datastore_id, profile_id), ProfileHandlerSettings.TRACE_BACK_MESSAGE)
 end
 
-function ProfileClass:Reconcile(data_template : {}?)
+function ProfileClass:Reconcile(data : any?)
 	-- Reconcile will fill missing data fields compared with default data. Not recursive.
 	local profile : Profile = self;
 	
@@ -185,15 +185,21 @@ function ProfileClass:Reconcile(data_template : {}?)
 	-- If profile data has not been loaded then this is illegal.
 	if not profile._data_loaded then profileNotLoadedWarning(profile) return end;
 	
-	if not data_template then
-		local format_string = "\nDatastore: %s\nProfile: %s\nContent: data_template is nil.";
+	if data == nil then
+		local format_string = "\nDatastore: %s\nProfile: %s\nContent: reconcile data is nil.";
 		DebugModule.warn(string.format(format_string, profile._datastore_id, profile._profile_id), ProfileHandlerSettings.TRACE_BACK_MESSAGE);
+		return;	
 	end
 
-	for index, value in pairs(data_template) do 
-		if (profile._data[index] == nil) then
-			profile._data[index] = DeepCopy(value);
+	if typeof(data) == "table" then
+		for index, value in pairs(data) do 
+			if (profile._data[index] == nil) then
+				profile._data[index] = DeepCopy(value);
+			end
 		end
+	else
+		-- If you are trying to reconcile a boolean or number then it will assume you want it as a number.
+		profile._data = data;
 	end
 end
 
@@ -218,7 +224,7 @@ function ProfileClass:Delete() : boolean
 	return delete_success;
 end
 
-function ProfileClass:GetData(path : string) : any?
+function ProfileClass:GetData(path : string?) : any?
 	local profile : Profile = self;
 	
 	-- If the profile has been destroyed then this is illegal.
@@ -251,7 +257,7 @@ function ProfileClass:GetData(path : string) : any?
 	return data;
 end
 
-function ProfileClass:SetData(path : string, value : any) : nil
+function ProfileClass:SetData(path : string?, value : any) : nil
 	
 	local profile : Profile = self;
 
@@ -261,37 +267,34 @@ function ProfileClass:SetData(path : string, value : any) : nil
 	-- If profile data has not been loaded then this is illegal.
 	if not profile._data_loaded then profileNotLoadedWarning(profile) return end;
 
-	if not path then
-		local format_string = "\nDatastore: %s\nProfile: %s\nContent: path must be set prior to using SetData on a profile.";
-		DebugModule.warn(string.format(
-			format_string, 
-			profile._datastore_id, profile._profile_id
-		), ProfileHandlerSettings.TRACE_BACK_MESSAGE);
-	end
+	-- if path is nil then we will set the entire data property to the value.
+	if path == nil then
+		profile._data = value;
+	else
+		local data = profile._data;
 
-	local data = profile._data;
+		local splitted_string = string.split(path, ".");
 
-	local splitted_string = string.split(path, ".");
+		local index = 1;
+		-- The reason we do -1 is because we want the parent to set the value
+		while (index < #splitted_string - 1) do 
+			local str = splitted_string[index];
 
-	local index = 1;
-	-- The reason we do -1 is because we want the parent to set the value
-	while (index < #splitted_string - 1) do 
-		local str = splitted_string[index];
-		
-		if not data[str] then
-			local format_string = "\nDatastore: %s\nProfile: %s\nContent: Failed to retrieve data. '%s' is not a valid property.";
-			DebugModule.print(string.format(
-				format_string, 
-				profile._datastore_id, profile._profile_id, str
-			), ProfileHandlerSettings.TRACE_BACK_MESSAGE);
-			return;
+			if not data[str] then
+				local format_string = "\nDatastore: %s\nProfile: %s\nContent: Failed to retrieve data. '%s' is not a valid property.";
+				DebugModule.print(string.format(
+					format_string, 
+					profile._datastore_id, profile._profile_id, str
+					), ProfileHandlerSettings.TRACE_BACK_MESSAGE);
+				return;
+			end
+
+			index += 1;
 		end
-		
-		index += 1;
-	end
 
-	-- We should now be at the last element
-	data[splitted_string[#splitted_string]] = value;
+		-- We should now be at the last element
+		data[splitted_string[#splitted_string]] = value;
+	end
 end
 
 function ProfileClass:IsDestroyed() : boolean
@@ -447,7 +450,7 @@ function ProfileClass.getProfile(datastore_id : string, profile_id : string) : P
 		DebugModule.warn(string.format(
 			"[ProfileClass]: '%s' does not exist in cached profiles.", 
 			datastore_id
-			), ProfileHandlerSettings.TRACE_BACK_MESSAGE);
+		), ProfileHandlerSettings.TRACE_BACK_MESSAGE);
 		return
 	end
 	
