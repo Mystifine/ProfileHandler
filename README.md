@@ -127,6 +127,20 @@ Handles individual profile instances. It provides methods to manipulate and save
      - `path (string?)`: Path to the data field.
      - `value (any)`: The value to set.
 
+6. **`Profile:IsDestroyed()`**
+   - **Description**: Checks if the profile has been destroyed.
+   - **Returns**: `boolean`.
+
+7. **`Profile:IsDataLoaded()`**
+   - **Description**: Checks if the profile data has been loaded.
+   - **Returns**: `boolean`.
+
+8. **`Profile:Reconcile(data_template)`**
+   - **Description**: Fills in missing fields in the profile data based on a data template.
+   - **Parameters**:
+     - `data_template (table)`: A table with the default structure and values.
+   - **Returns**: `boolean` indicating success.
+
 ---
 
 ## Setup
