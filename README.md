@@ -162,6 +162,9 @@ What it should look like:
 
 ![image](https://github.com/user-attachments/assets/14fa1fe0-6a20-4a39-8e28-e3e5bb48f005)
 
+Alternatively you can grab the model here:
+https://create.roblox.com/store/asset/17286844432/ProfileHandler
+
 ## Directory Structure
 
 - `bindables/`: Contains BindableEvent modules for inter-script communication.
