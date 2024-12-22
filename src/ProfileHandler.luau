@@ -2,7 +2,7 @@
 	Module Name: ProfileHandler
 	Description: Module is used to handle data in Roblox.
 	Written by: Mystifine
-	Last Updated: 17/12/2024
+	Last Updated: 22/12/2024
 ]]
 
 export type ProfileHandler = {
@@ -20,6 +20,8 @@ local ProfileHandlerSettings = require(script.ProfileHandlerSettings);
 local ProfileClass = require(script.ProfileClass);
 local DebugModule = require(script.Util.DebugModule);
 local DeepCopy = require(script.Util.DebugModule)
+
+export type Profile = ProfileClass.Profile;
 
 -- VARS
 local bindable_storage = script.Bindables;
