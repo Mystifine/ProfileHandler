@@ -19,7 +19,7 @@ export type Profile = {
 	_data_template : {}?,
 	_events : {},
 
-	save_bindable_event : BindableEvent,
+	_save_bindable_event : BindableEvent,
 
 	-- methods
 	Save : (self : Profile, session_ending : boolean) -> nil;
@@ -156,7 +156,9 @@ function ProfileClass:Save(session_ending : boolean)
 	if not profile._is_session_end_saving then
 		profile._is_saving = false;
 	else
-		profile.save_bindable_event:Fire();
+		if profile._save_bindable_event then
+			profile._save_bindable_event:Fire();
+		end
 		profile:Destroy();
 	end
 
@@ -181,7 +183,7 @@ function ProfileClass:Destroy()
 	end
 	
 	profile._is_destroyed = true;
-	profile.save_bindable_event = profile.save_bindable_event:Destroy();
+	profile._save_bindable_event = profile._save_bindable_event:Destroy();
 	
 	local format_string = "\nDatastore: %s\nProfile: %s\nContent: Profile has been cleaned up (Destroyed).";
 	DebugModule.print(string.format(format_string, datastore_id, profile_id), ProfileHandlerSettings.TRACE_BACK_MESSAGE)
@@ -420,7 +422,7 @@ function ProfileClass.newProfile(datastore_id : string, profile_id : string, res
 	local save_bindable_event = Instance.new("BindableEvent");
 	save_bindable_event.Name = string.format("%s.%s", datastore_id, profile_id);
 	save_bindable_event.Parent = bindables_container;
-	profile.save_bindable_event = save_bindable_event;
+	profile._save_bindable_event = save_bindable_event;
 	
 	if not cached_profiles[datastore_id] then
 		cached_profiles[datastore_id] = {};
