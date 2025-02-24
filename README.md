@@ -1,6 +1,6 @@
 # ProfileHandler
 
-`ProfileHandler` is a robust module for managing user profiles in Roblox. It leverages Roblox's DataStore service to handle data storage, autosaving, session locking, and data reconciliation. The system is designed to ensure data integrity and efficiency, even during server shutdowns.
+ProfileHandler is a robust module for managing user profiles in Roblox. It leverages Roblox's DataStore service to handle data storage, autosaving, session locking, and data reconciliation. The system is designed to ensure data integrity and efficiency, even during server shutdowns.
 
 - **Author**: Mystifine  
 - **Last Updated**: 17/12/2024
